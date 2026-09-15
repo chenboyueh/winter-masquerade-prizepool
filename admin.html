@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>線上抽獎系統 - 主持端控制台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center p-4">
+
+  <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-lg border border-gray-700">
+    <h1 class="text-3xl font-extrabold text-center mb-6 text-indigo-400">🎯 主持人抽獎控制台</h1>
+
+    <!-- 設定與開啟區塊 -->
+    <div id="controls-setup" class="space-y-4">
+      <div class="flex items-center space-x-3">
+        <label class="font-medium whitespace-nowrap">要幾個中獎人：</label>
+        <input type="number" id="winner-count" min="1" value="1" class="w-24 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center font-bold outline-none focus:border-indigo-500">
+        <button id="btn-start" class="flex-1 bg-emerald-600 hover:bg-emerald-500 font-bold py-2.5 px-4 rounded-lg transition shadow-lg">開啟抽獎</button>
+      </div>
+    </div>
+
+    <!-- 抽獎進行中區塊 -->
+    <div id="controls-active" class="hidden text-center space-y-6 mt-4">
+      <div class="bg-gray-700/50 p-4 rounded-xl border border-gray-600">
+        <p class="text-xl font-bold text-yellow-400 animate-pulse mb-2">抽獎人數統計中！</p>
+        <p class="text-gray-300">目前參與抽獎人數：<span id="participant-count" class="text-3xl font-black text-indigo-400">0</span> 人</p>
+      </div>
+
+      <button id="btn-announce" class="w-full bg-indigo-600 hover:bg-indigo-500 font-bold py-3 text-lg rounded-lg transition shadow-lg">公布結果</button>
+    </div>
+
+    <!-- 中獎結果顯示區塊 -->
+    <div id="controls-announced" class="hidden mt-6 space-y-4">
+      <h2 class="text-xl font-bold text-emerald-400 text-center">🏆 中獎名單</h2>
+      <div id="admin-winner-list" class="space-y-2 max-h-72 overflow-y-auto p-3 bg-gray-700 rounded-lg border border-gray-600"></div>
+      <button id="btn-reset" class="w-full bg-gray-600 hover:bg-gray-500 font-bold py-2 rounded-lg transition">重置 / 關閉活動</button>
+    </div>
+  </div>
+
+  <script>
+    // 1. 請在此替換為相同的 Firebase 配置
+    const firebaseConfig = {
+      apiKey: "AIzaSyC3daVyXS88j5qIHJWspGa-ZarzVURo4Pc",
+      authDomain: "winter-masquerade-prizepool.firebaseapp.com",
+      databaseURL: "https://winter-masquerade-prizepool-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "winter-masquerade-prizepool",
+      storageBucket: "winter-masquerade-prizepool.firebasestorage.app",
+      messagingSenderId: "536272858436",
+      appId: "1:536272858436:web:a51f673f4641a060e43b11"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let participantsData = {};
+
+    // 監聽參與人數變更 (適合作為上百人的統計)
+    db.ref('participants').on('value', (snapshot) => {
+      participantsData = snapshot.val() || {};
+      const count = Object.keys(participantsData).length;
+      document.getElementById('participant-count').innerText = count;
+    });
+
+    // 監聽目前狀態
+    db.ref('draw_state').on('value', (snapshot) => {
+      const state = snapshot.val() || { status: 'closed' };
+
+      document.getElementById('controls-setup').classList.toggle('hidden', state.status !== 'closed');
+      document.getElementById('controls-active').classList.toggle('hidden', state.status !== 'active');
+      document.getElementById('controls-announced').classList.toggle('hidden', state.status !== 'announced');
+
+      if (state.status === 'announced') {
+        renderAdminWinners(state.winners || []);
+      }
+    });
+
+    // 按鈕：開啟抽獎
+    document.getElementById('btn-start').addEventListener('click', () => {
+      const count = parseInt(document.getElementById('winner-count').value) || 1;
+      // 開啟時先清空上一輪的參與者資料
+      db.ref('participants').remove();
+      db.ref('draw_state').set({
+        status: 'active',
+        winnerCount: count
+      });
+    });
+
+    // 按鈕：公布結果（隨機選出中獎者）
+    document.getElementById('btn-announce').addEventListener('click', () => {
+      const participantKeys = Object.keys(participantsData);
+      if (participantKeys.length === 0) {
+        alert("目前還沒有任何人參與抽獎！");
+        return;
+      }
+
+      db.ref('draw_state/winnerCount').once('value', (snapshot) => {
+        const winnerCount = snapshot.val() || 1;
+        
+        // 洗牌演算法隨機抽中獎者
+        const shuffled = [...participantKeys].sort(() => 0.5 - Math.random());
+        const selectedKeys = shuffled.slice(0, winnerCount);
+        const winners = selectedKeys.map(key => participantsData[key]);
+
+        // 更新狀態為已公布
+        db.ref('draw_state').update({
+          status: 'announced',
+          winners: winners
+        });
+      });
+    });
+
+    // 按鈕：重置
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      db.ref('draw_state').set({ status: 'closed' });
+    });
+
+    // 渲染主持端中獎結果 (顯示 系級 / 名字)
+    function renderAdminWinners(winners) {
+      const container = document.getElementById('admin-winner-list');
+      container.innerHTML = '';
+      winners.forEach((w, index) => {
+        const item = document.createElement('div');
+        item.className = 'p-3 bg-gray-800 rounded flex justify-between items-center border border-gray-600';
+        item.innerHTML = `
+          <span class="text-indigo-300 font-bold">#${index + 1}</span>
+          <span class="font-semibold text-white">${w.dept}</span>
+          <span class="text-yellow-300 font-bold">${w.name}</span>
+          <span class="text-xs text-gray-400">(${w.school})</span>
+        `;
+        container.appendChild(item);
+      });
+    }
+  </script>
+</body>
+</html>
